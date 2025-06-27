@@ -119,7 +119,7 @@ async def send_realtime_task(live_session, out_queue):
         try:
             msg = await out_queue.get()
             if live_session and global_session_vars['is_running']:
-                await live_session.send(input=msg)
+                await live_session.send_realtime_input(msg)
             out_queue.task_done()
         except asyncio.CancelledError:
             break
@@ -138,8 +138,8 @@ async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_insta
                 await asyncio.sleep(0.1)
                 continue
 
-            # Correctly iterate over the async generator
-            async for response in live_session.responses:
+            # Correctly iterate over the async generator <mcreference link="https://github.com/googleapis/python-genai/blob/main/google/genai/live.py" index="1">1</mcreference>
+            async for response in live_session.receive():
                 if not global_session_vars['is_running']:
                     break
                 if data := response.data:
