@@ -1,0 +1,8 @@
+Flask
+Flask-SocketIO
+google-genai
+opencv-python
+pyaudio
+Pillow
+mss
+google-api-core
