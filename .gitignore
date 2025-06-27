@@ -1,2 +1,3 @@
 venv
-*.ipyc
+*.pyc
+__pycache__

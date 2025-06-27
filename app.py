@@ -16,14 +16,7 @@ from flask_socketio import SocketIO, emit
 from google import genai
 from google.genai import types
 
-# --- Configuration from sample.txt --- (with modifications for Flask)
-FORMAT = pyaudio.paInt16
-CHANNELS = 1
-SEND_SAMPLE_RATE = 16000
-RECEIVE_SAMPLE_RATE = 24000
-CHUNK_SIZE = 1024
-
-MODEL = "models/gemini-2.5-flash-preview-native-audio-dialog"
+import config
 
 # Ensure GEMINI_API_KEY is set in your environment
 API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -40,24 +33,12 @@ tools = [
 ]
 
 CONFIG = types.LiveConnectConfig(
-    response_modalities=[
-        "AUDIO",
-        "TEXT", # Added TEXT for potential debugging or alternative output
-    ],
-    media_resolution="MEDIA_RESOLUTION_MEDIUM",
-    speech_config=types.SpeechConfig(
-        voice_config=types.VoiceConfig(
-            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name="Zephyr")
-        )
-    ),
-    # context_window_compression=types.ContextWindowCompressionConfig(
-    #     trigger_tokens=25600,
-    #     sliding_window=types.SlidingWindow(target_tokens=12800),
-    # ),
-    # tools=tools, # Temporarily removed for debugging ConnectionClosedError
+    response_modalities=["AUDIO"],
 )
 
-pya = pyaudio.PyAudio()
+from audio_utils import (list_audio_devices, listen_audio_task, play_audio_task, terminate_pyaudio)
+
+pya = pyaudio.PyAudio() # This will be managed within audio_utils
 # --- End of Configuration ---
 
 app = Flask(__name__)
@@ -148,46 +129,7 @@ async def send_realtime_task(live_session, out_queue):
             break
     print("Send realtime task ended")
 
-async def listen_audio_task(live_session, out_queue, socketio_instance): # Added socketio_instance
-    print("[DEBUG] Entered listen_audio_task") # DEBUG_LOG_4
-    mic_info = pya.get_default_input_device_info()
-    audio_stream = await asyncio.to_thread(
-        pya.open,
-        format=FORMAT,
-        channels=CHANNELS,
-        rate=SEND_SAMPLE_RATE,
-        input=True,
-        input_device_index=mic_info["index"],
-        frames_per_buffer=CHUNK_SIZE,
-    )
-    print("Microphone stream opened.")
-    while global_session_vars['is_running']:
-        try:
-            # Use a timeout to prevent blocking indefinitely if is_running becomes false
-            data = await asyncio.to_thread(audio_stream.read, CHUNK_SIZE, exception_on_overflow=False)
-            if global_session_vars['is_running']:
-                 await out_queue.put({"data": data, "mime_type": "audio/pcm"})
-                 # Placeholder for user_text event. In a real app, this would come from a speech-to-text process.
-                 # Emitting a generic message for now when audio is detected.
-                 socketio_instance.emit('user_text', {'text': '[User speaking...]'})
-                 # A more robust solution would be to only emit this once per user speech segment.
-        except asyncio.CancelledError:
-            break
-        except IOError as e:
-            if e.errno == pyaudio.paInputOverflowed:
-                print("Input overflowed. Skipping frame.")
-            else:
-                print(f"IOError in listen_audio_task: {e}")
-                socketio_instance.emit('error', {'message': f'Audio input error: {str(e)}'})
-                break # Exit on other IOErrors
-        except Exception as e:
-            print(f"Error in listen_audio_task: {e}")
-            socketio_instance.emit('error', {'message': f'Audio input error: {str(e)}'})
-            break
-    
-    audio_stream.stop_stream()
-    audio_stream.close()
-    print("Microphone stream closed.")
+
 
 async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_instance):
     while global_session_vars['is_running']:
@@ -195,9 +137,9 @@ async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_insta
             if not live_session or not global_session_vars['is_running']:
                 await asyncio.sleep(0.1)
                 continue
-            
-            turn = live_session.receive() # This might block, ensure it's handled
-            async for response in turn:
+
+            # Correctly iterate over the async generator
+            async for response in live_session.responses:
                 if not global_session_vars['is_running']:
                     break
                 if data := response.data:
@@ -206,10 +148,6 @@ async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_insta
                 if text := response.text:
                     print(f"Gemini Text: {text}")
                     socketio_instance.emit('bot_text', {'text': text})
-            # Clear queue on interruption (turn_complete)
-            while not audio_in_queue.empty():
-                audio_in_queue.get_nowait()
-                audio_in_queue.task_done()
 
         except asyncio.CancelledError:
             break
@@ -224,35 +162,7 @@ async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_insta
                 await asyncio.sleep(1) # Avoid tight loop on persistent error
     print("Receive Gemini audio task ended")
 
-async def play_audio_task(audio_in_queue, socketio_instance): # Added socketio_instance
-    stream = await asyncio.to_thread(
-        pya.open,
-        format=FORMAT, # Assuming output format is same as input for simplicity here, might need adjustment
-        channels=CHANNELS,
-        rate=RECEIVE_SAMPLE_RATE, # Gemini output rate
-        output=True,
-    )
-    print("Audio output stream opened.")
-    while global_session_vars['is_running']:
-        try:
-            bytestream = await asyncio.wait_for(audio_in_queue.get(), timeout=1.0) # Timeout to check is_running
-            if global_session_vars['is_running']:
-                await asyncio.to_thread(stream.write, bytestream)
-            audio_in_queue.task_done()
-            # Simplified bot_speech_end: emit if queue is empty. Real end-of-speech detection is more complex.
-            if audio_in_queue.empty(): 
-                 socketio_instance.emit('bot_speech_end')
-        except asyncio.TimeoutError:
-            continue # Check is_running and continue
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"Error in play_audio_task: {e}")
-            socketio_instance.emit('error', {'message': f'Audio playback error: {str(e)}'})
-            break
-    stream.stop_stream()
-    stream.close()
-    print("Audio output stream closed.")
+
 
 async def run_gemini_interaction(live_session, audio_out_queue, audio_in_queue, video_mode):
     print("[DEBUG] Entered run_gemini_interaction") # DEBUG_LOG_3
@@ -266,7 +176,7 @@ async def run_gemini_interaction(live_session, audio_out_queue, audio_in_queue, 
     tasks = []
     try:
         # Start microphone input task
-        tasks.append(asyncio.create_task(listen_audio_task(live_session, audio_out_queue, socketio))) # Passed socketio
+        tasks.append(asyncio.create_task(listen_audio_task(live_session, audio_out_queue, socketio, global_session_vars))) # Passed socketio and global_session_vars
 
         # Start video input task if applicable
         if video_mode == 'camera':
@@ -279,7 +189,7 @@ async def run_gemini_interaction(live_session, audio_out_queue, audio_in_queue, 
 
         # Start task to receive audio from Gemini and play it
         tasks.append(asyncio.create_task(receive_gemini_audio_task(live_session, audio_in_queue, socketio))) # Passed socketio
-        tasks.append(asyncio.create_task(play_audio_task(audio_in_queue, socketio))) # Passed socketio
+        tasks.append(asyncio.create_task(play_audio_task(audio_in_queue, socketio, global_session_vars)))
         
         global_session_vars['tasks'] = tasks
         await asyncio.gather(*tasks)
@@ -391,13 +301,14 @@ def handle_start_interaction(data): # Renamed function
                 audio_out_queue = asyncio.Queue()
                 audio_in_queue = asyncio.Queue()
                 
-                # Connect to Gemini Live
-                live_session = client.aio.live.connect(model=MODEL, config=CONFIG)
-                print("SocketIO: Connected to Gemini Live.")
-                socketio.emit('status', {'message': 'Interaction session started. Listening...'})
-                
-                # Run the interaction
-                loop.run_until_complete(run_gemini_interaction(live_session, audio_out_queue, audio_in_queue, video_mode))
+                # Run the interaction using an async context manager for the session
+                async def main():
+                    async with client.aio.live.connect(model=config.MODEL, config=CONFIG) as live_session:
+                        print("SocketIO: Connected to Gemini Live.")
+                        socketio.emit('status', {'message': 'Interaction session started. Listening...'})
+                        await run_gemini_interaction(live_session, audio_out_queue, audio_in_queue, video_mode)
+
+                loop.run_until_complete(main())
                 
             except Exception as e_run:
                 print(f"Error in background Gemini interaction task: {e_run}")
@@ -435,12 +346,15 @@ def handle_stop_interaction(): # Renamed function
         emit('status', {'message': 'No active interaction to stop.'})
 
 
+
+
 if __name__ == '__main__':
     print("Starting Flask-SocketIO server...")
+    list_audio_devices() # List devices on startup
     # It's important that PyAudio is terminated when the app exits.
     try:
-        socketio.run(app, debug=True, host='0.0.0.0', port=5001, use_reloader=False) # Changed port to 5001
+        socketio.run(app, debug=True, host='0.0.0.0', port=5004, use_reloader=False) # Changed port to 5001
     finally:
         print("Terminating PyAudio...")
-        pya.terminate()
+        terminate_pyaudio()
         print("PyAudio terminated.")
