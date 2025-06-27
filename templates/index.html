@@ -3,308 +3,222 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jawa Motorcycles - Voice Assistant</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <title>Jawa Voice Navigator</title>
+    <link href="https://fonts.googleapis.com/css?family=Roboto:400,700&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Roboto', sans-serif;
+            background: linear-gradient(120deg, #232526, #414345);
+            color: #fff;
             margin: 0;
-            background: linear-gradient(135deg, #232526 0%, #414345 100%); /* Dark gradient background */
-            color: #e0e0e0; /* Slightly softer light text */
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
+            padding: 0;
             min-height: 100vh;
-            padding: 20px;
-            box-sizing: border-box;
-            overflow-x: hidden; /* Prevent horizontal scroll on small screens */
         }
-        #container {
-            background-color: rgba(44, 44, 44, 0.85); /* Semi-transparent dark container */
-            backdrop-filter: blur(10px); /* Frosted glass effect */
-            padding: 25px 35px;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-            width: 90%;
-            max-width: 550px; /* Slightly wider */
-            text-align: center;
-            display: flex;
-            flex-direction: column;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        .logo {
-            max-width: 170px; /* Slightly smaller */
-            margin-bottom: 20px;
-            align-self: center;
-            filter: drop-shadow(0px 2px 5px rgba(0,0,0,0.2));
+        .container {
+            max-width: 600px;
+            margin: 40px auto;
+            background: rgba(30, 30, 30, 0.95);
+            border-radius: 16px;
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+            padding: 32px 24px 24px 24px;
         }
         h1 {
-            color: #e50914; /* Brighter Jawa Red */
-            margin-bottom: 20px;
-            font-weight: 700; /* Bolder */
-            font-size: 2em; /* Larger */
-            text-shadow: 1px 1px 3px rgba(0,0,0,0.3);
-        }
-        #chat-area {
-            background-color: rgba(20, 20, 20, 0.7);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            padding: 15px;
-            margin-bottom: 25px;
-            height: 250px; /* Increased height */
-            overflow-y: auto;
-            text-align: left;
-            display: flex;
-            flex-direction: column;
-            gap: 10px; /* Space between messages */
-        }
-        .chat-message {
-            padding: 10px 15px;
-            border-radius: 18px;
-            max-width: 85%;
-            word-wrap: break-word;
-            line-height: 1.4;
-            transition: transform 0.2s ease-out, opacity 0.2s ease-out;
-        }
-        .chat-message.new {
-            transform: scale(0.9);
-            opacity: 0;
-        }
-        .chat-message.user {
-            background-color: #007bff; /* User message blue */
-            color: white;
-            align-self: flex-end;
-            border-bottom-right-radius: 6px; /* Smoother radius */
-            border-top-left-radius: 18px;
-            border-top-right-radius: 18px;
-            border-bottom-left-radius: 18px;
-        }
-        .chat-message.bot {
-            background-color: #e50914; /* Jawa Red for bot messages */
-            color: white;
-            align-self: flex-start;
-            border-bottom-left-radius: 6px; /* Smoother radius */
-            border-top-left-radius: 18px;
-            border-top-right-radius: 18px;
-            border-bottom-right-radius: 18px;
-        }
-        .chat-message.status, .chat-message.error {
-            font-style: italic;
-            color: #a0a0a0;
-            font-size: 0.9em;
             text-align: center;
-            align-self: center;
-            background-color: transparent;
-            padding: 6px 0;
-            border-radius: 0;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: 1px;
         }
-        .chat-message.error {
-            color: #ffc107; /* Warning yellow for errors */
-            font-weight: 500;
+        .status {
+            text-align: center;
+            margin-bottom: 16px;
+            font-size: 1.1em;
+            color: #ffd700;
+        }
+        .chat {
+            background: #222;
+            border-radius: 10px;
+            padding: 16px;
+            height: 320px;
+            overflow-y: auto;
+            margin-bottom: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        .msg {
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+        .msg.user {
+            text-align: right;
+            color: #7ecfff;
+        }
+        .msg.bot {
+            text-align: left;
+            color: #ffd700;
         }
         .controls {
             display: flex;
-            flex-direction: column;
+            justify-content: space-between;
             align-items: center;
-            gap: 15px;
+            margin-bottom: 8px;
         }
-        #micButton {
-            background-color: #c00; /* Jawa Red */
-            color: white;
+        .video-mode {
+            background: #333;
+            color: #fff;
             border: none;
-            width: 70px;
-            height: 70px;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 1em;
+            margin-right: 8px;
+        }
+        .mic-btn {
+            background: #ffd700;
+            color: #232526;
+            border: none;
             border-radius: 50%;
-            cursor: pointer;
-            font-size: 28px; /* Mic icon size */
+            width: 56px;
+            height: 56px;
+            font-size: 2em;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: background-color 0.3s ease, transform 0.2s ease;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            transition: background 0.2s;
         }
-        #micButton:hover {
-            background-color: #a00; /* Darker Red */
+        .mic-btn.active {
+            background: #ff5252;
+            color: #fff;
         }
-        #micButton:active {
-            transform: scale(0.95);
+        .stop-btn {
+            background: #444;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 16px;
+            font-size: 1em;
+            margin-left: 8px;
+            cursor: pointer;
         }
-        #micButton.listening {
-            background-color: #007bff; /* Blue when listening */
-            animation: pulse 1.5s infinite;
-        }
-        #micButton.processing {
-            background-color: #ffc107; /* Yellow when processing */
-            animation: pulse-processing 1.2s infinite ease-in-out;
-        }
-        @keyframes pulse-processing {
-            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.5); }
-            50% { transform: scale(1.05); box-shadow: 0 0 0 8px rgba(255, 193, 7, 0); }
-            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 193, 7, 0); }
-        }
-        #micButton:disabled {
-            background-color: #555;
+        .stop-btn:disabled {
+            background: #222;
+            color: #888;
             cursor: not-allowed;
-            box-shadow: none;
         }
-        @keyframes pulse {
-            0% { box-shadow: 0 0 0 0 rgba(0, 123, 255, 0.7); }
-            70% { box-shadow: 0 0 0 10px rgba(0, 123, 255, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(0, 123, 255, 0); }
+        .footer {
+            text-align: center;
+            margin-top: 24px;
+            color: #aaa;
+            font-size: 0.95em;
         }
-        .options select {
-            background-color: #444;
-            color: #f0f0f0;
-            border: 1px solid #555;
-            padding: 10px 15px;
-            border-radius: 5px;
-            font-size: 15px;
-            outline: none;
-        }
-        .options select:disabled {
-             background-color: #383838;
-             color: #888;
-        }
-
     </style>
 </head>
 <body>
-    <div id="container">
-        <img src="https://www.jawamotorcycles.com/assets/images/jawa-logo.svg" alt="Jawa Motorcycles Logo" class="logo">
+    <div class="container">
         <h1>Jawa Voice Navigator</h1>
-        
-        <div id="chat-area">
-            <!-- Chat messages will appear here -->
-        </div>
-
+        <div class="status" id="status">Ready.</div>
+        <div class="chat" id="chat"></div>
         <div class="controls">
-            <button id="micButton" title="Start/Stop Interaction">🎤</button>
-            <div class="options">
-                <select id="videoMode">
-                    <option value="none" selected>No Video</option>
-                    <option value="camera">Share Camera</option>
-                    <option value="screen">Share Screen</option>
-                </select>
-            </div>
+            <select id="videoMode" class="video-mode">
+                <option value="none">No Video</option>
+                <option value="camera">Share Camera</option>
+                <option value="screen">Share Screen</option>
+            </select>
+            <button id="micBtn" class="mic-btn" title="Start/Stop Voice"><span id="micIcon">🎤</span></button>
+            <button id="stopBtn" class="stop-btn" disabled>Stop</button>
         </div>
     </div>
-
+    <div class="footer">
+        Powered by Google Gemini, Flask, and Socket.IO &mdash; <a href="https://github.com/google-gemini/cookbook" style="color:#ffd700;" target="_blank">Learn more</a>
+    </div>
+    <audio id="audioPlayer" style="display:none;"></audio>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
-        const socket = io('http://localhost:5001');
-        const micButton = document.getElementById('micButton');
-        const videoModeSelect = document.getElementById('videoMode');
-        const chatArea = document.getElementById('chat-area');
-        let isInteracting = false;
+        const socket = io();
+        const statusDiv = document.getElementById('status');
+        const chatDiv = document.getElementById('chat');
+        const micBtn = document.getElementById('micBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const videoModeSel = document.getElementById('videoMode');
+        const micIcon = document.getElementById('micIcon');
+        const audioPlayer = document.getElementById('audioPlayer');
 
-        function addMessageToChat(text, type = 'status') { // type can be 'user', 'bot', 'status', or 'error'
-            const messageDiv = document.createElement('div');
-            messageDiv.classList.add('chat-message', type, 'new'); // Add 'new' class for animation
-            messageDiv.textContent = text;
-            chatArea.appendChild(messageDiv);
-            
-            // Trigger reflow to apply 'new' class style then remove it for animation
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    messageDiv.classList.remove('new');
-                });
-            });
+        let isActive = false;
+        let currentVideoMode = 'none';
 
-            chatArea.scrollTop = chatArea.scrollHeight; // Scroll to bottom
-            console.log(`${type.toUpperCase()}: `, text);
+        function addMsg(text, sender) {
+            const msg = document.createElement('div');
+            msg.className = 'msg ' + sender;
+            msg.textContent = text;
+            chatDiv.appendChild(msg);
+            chatDiv.scrollTop = chatDiv.scrollHeight;
         }
 
-        function updateMicButtonState(interacting, processing = false) {
-            isInteracting = interacting;
-            if (interacting) {
-                micButton.classList.add('listening');
-                micButton.classList.remove('processing');
-                micButton.innerHTML = '❚❚'; // Pause symbol
-                micButton.title = 'Stop Interaction';
-                videoModeSelect.disabled = true;
-                if (processing) {
-                    micButton.classList.add('processing');
-                    micButton.classList.remove('listening');
-                    micButton.innerHTML = '⚙️'; // Gear for processing
-                }
+        function setStatus(msg) {
+            statusDiv.textContent = msg;
+        }
+
+        function setActive(active) {
+            isActive = active;
+            micBtn.classList.toggle('active', active);
+            stopBtn.disabled = !active;
+            videoModeSel.disabled = active;
+            micBtn.disabled = active;
+            if (active) {
+                micIcon.textContent = '🔴';
             } else {
-                micButton.classList.remove('listening', 'processing');
-                micButton.innerHTML = '🎤'; // Mic symbol
-                micButton.title = 'Start Interaction';
-                micButton.disabled = false;
-                videoModeSelect.disabled = false;
+                micIcon.textContent = '🎤';
             }
         }
 
-        socket.on('connect', () => {
-            addMessageToChat('Connected. Click 🎤 to start.', 'status');
-            updateMicButtonState(false); // Ensure button is in start state
-        });
+        micBtn.onclick = () => {
+            if (isActive) return;
+            currentVideoMode = videoModeSel.value;
+            socket.emit('start_interaction', { video_mode: currentVideoMode });
+            setActive(true);
+            setStatus('Connecting...');
+        };
 
-        socket.on('disconnect', () => {
-            addMessageToChat('Disconnected. Please refresh.', 'error'); // Use error style
-            updateMicButtonState(false);
-            micButton.disabled = true; // Disable mic button on disconnect
-            videoModeSelect.disabled = true;
-        });
+        stopBtn.onclick = () => {
+            if (!isActive) return;
+            socket.emit('stop_interaction');
+            setActive(false);
+            setStatus('Stopped.');
+        };
 
-        socket.on('status', (data) => {
-            addMessageToChat(data.message, 'status');
-            // More specific state updates will be handled by dedicated events or existing logic in micButton click
-        });
+        videoModeSel.onchange = () => {
+            // No-op, mode sent on start
+        };
 
-        // This will be emitted from backend when user's speech is transcribed
-        socket.on('user_text', (data) => {
-            addMessageToChat(data.text, 'user');
-            updateMicButtonState(true, true); // Show processing as bot is working
+        socket.on('status', data => {
+            setStatus(data.message);
         });
-
-        // This will be emitted from backend when bot starts generating/streaming speech
+        socket.on('error', data => {
+            setStatus('Error: ' + data.message);
+            setActive(false);
+        });
+        socket.on('user_text', data => {
+            addMsg(data.text, 'user');
+        });
+        socket.on('bot_text', data => {
+            addMsg(data.text, 'bot');
+        });
         socket.on('bot_speech_start', () => {
-            console.log("Bot speech started, mic button to processing.");
-            if(isInteracting) {
-                 updateMicButtonState(true, true); // Show processing/speaking indicator
-            }
+            setStatus('Bot is speaking...');
         });
-
-        // This will be emitted from backend when bot finishes speaking
         socket.on('bot_speech_end', () => {
-            console.log("Bot speech ended, mic should be listening again if still interacting.");
-            if(isInteracting) {
-                updateMicButtonState(true, false); // Back to listening (not processing)
-            }
+            setStatus('Listening...');
         });
-
-        // Renamed from bot_text_response for clarity, or can be a new event for text part of response
-        socket.on('bot_text', (data) => {
-            addMessageToChat(data.text, 'bot');
-            // updateMicButtonState(true, false); // Moved to bot_speech_end for better flow
+        socket.on('interaction_stopped', data => {
+            setStatus(data.message || 'Interaction stopped.');
+            setActive(false);
         });
-
-        socket.on('interaction_stopped', (data) => {
-            addMessageToChat(data.message || 'Interaction stopped.', 'status');
-            updateMicButtonState(false);
+        socket.on('connect', () => {
+            setStatus('Connected. Ready.');
         });
-
-        socket.on('error', (data) => {
-            addMessageToChat(`⚠️ ${data.message}`, 'error'); // Use error style and icon
-            console.error("Received error:", data.message);
-            updateMicButtonState(false); // Stop interaction on critical error
+        socket.on('disconnect', () => {
+            setStatus('Disconnected from server.');
+            setActive(false);
         });
-
-        micButton.addEventListener('click', () => {
-            if (isInteracting) {
-                socket.emit('stop_interaction'); // Changed to generic 'stop_interaction'
-                // Backend will send 'interaction_stopped' and 'status' messages
-                // updateMicButtonState(true, true); // Let backend events control this
-            } else {
-                const videoMode = videoModeSelect.value;
-                socket.emit('start_interaction', { video_mode: videoMode }); // Changed to 'start_interaction'
-                addMessageToChat('Attempting to start...', 'status');
-                updateMicButtonState(true, true); // Show processing while attempting to start
-            }
-        });
-
-        // Initial state message
-        addMessageToChat('Welcome to Jawa Voice Navigator! Click the mic to begin.', 'status');
+    </script>
+</body>
+</html>

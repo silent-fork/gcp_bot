@@ -15,7 +15,6 @@ from flask_socketio import SocketIO, emit
 
 from google import genai
 from google.genai import types
-from google.api_core import exceptions as google_exceptions # Added for DeadlineExceeded
 
 # --- Configuration from sample.txt --- (with modifications for Flask)
 FORMAT = pyaudio.paInt16
@@ -190,7 +189,7 @@ async def listen_audio_task(live_session, out_queue, socketio_instance): # Added
     audio_stream.close()
     print("Microphone stream closed.")
 
-async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_instance): # Added socketio_instance
+async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_instance):
     while global_session_vars['is_running']:
         try:
             if not live_session or not global_session_vars['is_running']:
@@ -206,8 +205,7 @@ async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_insta
                     audio_in_queue.put_nowait(data)
                 if text := response.text:
                     print(f"Gemini Text: {text}")
-                    socketio_instance.emit('bot_text', {'text': text}) # Changed event name to bot_text
-            
+                    socketio_instance.emit('bot_text', {'text': text})
             # Clear queue on interruption (turn_complete)
             while not audio_in_queue.empty():
                 audio_in_queue.get_nowait()
@@ -215,13 +213,15 @@ async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_insta
 
         except asyncio.CancelledError:
             break
-        except types.StopCandidateException: # Changed from types.generation_types.StopCandidateException
-            print("Gemini turn ended (StopCandidateException).")
         except Exception as e:
-            print(f"Error in receive_gemini_audio_task: {e}")
-            socketio_instance.emit('error', {'message': f'Gemini audio receiving error: {str(e)}'})
-            # Potentially break or attempt to gracefully recover session
-            await asyncio.sleep(1) # Avoid tight loop on persistent error
+            # CORRECTED exception handling
+            if type(e).__name__ == "StopCandidateException":
+                print("Gemini turn ended (StopCandidateException).")
+                break
+            else:
+                print(f"Error in receive_gemini_audio_task: {e}")
+                socketio_instance.emit('error', {'message': f'Gemini audio receiving error: {str(e)}'})
+                await asyncio.sleep(1) # Avoid tight loop on persistent error
     print("Receive Gemini audio task ended")
 
 async def play_audio_task(audio_in_queue, socketio_instance): # Added socketio_instance
@@ -284,16 +284,18 @@ async def run_gemini_interaction(live_session, audio_out_queue, audio_in_queue, 
         global_session_vars['tasks'] = tasks
         await asyncio.gather(*tasks)
 
-    except types.generation_types.StopCandidateException: # This might still be an issue
-        print("StopCandidateException received, interaction ended normally.")
-        socketio.emit('interaction_stopped', {'message': 'Interaction ended by Gemini.'}) # Changed to interaction_stopped
-    except google_exceptions.DeadlineExceeded: # Changed to use google_exceptions
-        print("DeadlineExceeded during Gemini interaction.")
-        socketio.emit('error', {'message': 'Interaction timed out.'})
     except Exception as e:
-        print(f"Exception in run_gemini_interaction: {e}")
-        traceback.print_exc()
-        socketio.emit('error', {'message': f'An error occurred: {str(e)}'})
+        # CORRECTED exception handling
+        if type(e).__name__ == "StopCandidateException":
+            print("StopCandidateException received, interaction ended normally.")
+            socketio.emit('interaction_stopped', {'message': 'Interaction ended by Gemini.'})
+        elif type(e).__name__ == "DeadlineExceeded":
+            print("DeadlineExceeded during Gemini interaction.")
+            socketio.emit('error', {'message': 'Interaction timed out.'})
+        else:
+            print(f"Exception in run_gemini_interaction: {e}")
+            traceback.print_exc()
+            socketio.emit('error', {'message': f'An error occurred: {str(e)}'})
     finally:
         print("run_gemini_interaction cleaning up...")
         await stop_gemini_session_async()
@@ -323,7 +325,6 @@ async def stop_gemini_session_async():
             # Assuming live_session.close() is thread-safe or called from the correct thread
             # If it's an async close, it needs to be handled in its event loop
             # For now, let's assume it can be called. If it's async, it needs special handling.
-            # Since we are in a sync function, direct await is not possible.
             # This part might need refinement depending on gemini SDK's close behavior.
             print("Attempting to close live session (if any). This might need async handling.")
             # A proper async close would be: asyncio.run_coroutine_threadsafe(live_session.close(), loop_of_session)
