@@ -5,10 +5,7 @@ import io
 import traceback
 import threading
 
-import cv2
-import pyaudio
-import PIL.Image
-import mss
+
 
 from flask import Flask, render_template
 from flask_socketio import SocketIO, emit
@@ -18,10 +15,23 @@ from google.genai import types
 
 import config
 
-# Ensure GEMINI_API_KEY is set in your environment
-API_KEY = os.environ.get("GEMINI_API_KEY")
-if not API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable not set.")
+def get_api_key():
+    """Reads the API key from local.properties or environment variables."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if api_key:
+        return api_key
+
+    try:
+        with open('local.properties', 'r') as f:
+            for line in f:
+                if line.startswith('GEMINI_API_KEY'):
+                    return line.split('=')[1].strip()
+    except FileNotFoundError:
+        pass  # File doesn't exist, which is fine
+
+    raise ValueError("GEMINI_API_KEY not found. Please set it in your environment variables or in a local.properties file.")
+
+API_KEY = get_api_key()
 
 client = genai.Client(
     # http_options={"api_version": "v1beta"}, # This might be outdated or not needed for latest SDK
@@ -36,179 +46,26 @@ CONFIG = types.LiveConnectConfig(
     response_modalities=["AUDIO"],
 )
 
-from audio_utils import (list_audio_devices, listen_audio_task, play_audio_task, terminate_pyaudio)
-
-pya = pyaudio.PyAudio() # This will be managed within audio_utils
-# --- End of Configuration ---
+from src.audio import list_audio_devices, play_audio_task, terminate_pyaudio
+from src.gemini import (
+    run_gemini_interaction,
+    stop_gemini_session_async,
+    global_session_vars,
+)
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.urandom(24) # For session management
-socketio = SocketIO(app, async_mode='threading') # Using threading for async operations
+app.config['SECRET_KEY'] = os.urandom(24)
+socketio = SocketIO(app, async_mode='threading')
 
-# Global session state (consider a more robust session management for multiple users)
-global_session_vars = {
-    'live_session': None,
-    'audio_out_queue': None,
-    'audio_in_queue': None,
-    'video_mode': 'none', # Default to no video, can be changed by client
-    'is_running': False,
-    'tasks': []
-}
+# List audio devices on startup
+list_audio_devices()
 
-def _get_frame(cap):
-    ret, frame = cap.read()
-    if not ret:
-        return None
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    img = PIL.Image.fromarray(frame_rgb)
-    img.thumbnail([1024, 1024])
-    image_io = io.BytesIO()
-    img.save(image_io, format="jpeg")
-    image_io.seek(0)
-    mime_type = "image/jpeg"
-    image_bytes = image_io.read()
-    return {"mime_type": mime_type, "data": base64.b64encode(image_bytes).decode()}
+# Pass socketio object to gemini module
+import src.gemini
+import src.audio
+src.gemini.socketio = socketio
+src.audio.socketio = socketio
 
-async def get_frames_task(out_queue):
-    cap = await asyncio.to_thread(cv2.VideoCapture, 0)
-    while global_session_vars['is_running'] and global_session_vars['video_mode'] == 'camera':
-        try:
-            frame = await asyncio.to_thread(_get_frame, cap)
-            if frame is None:
-                socketio.emit('status', {'message': 'Error reading camera frame.'})
-                break
-            await out_queue.put(frame)
-            await asyncio.sleep(1.0) # Match original
-        except Exception as e:
-            print(f"Error in get_frames_task: {e}")
-            socketio.emit('error', {'message': f'Camera error: {str(e)}'})
-            break
-    if cap.isOpened():
-        cap.release()
-    print("Camera task ended")
-
-def _get_screen():
-    sct = mss.mss()
-    monitor = sct.monitors[0]
-    i = sct.grab(monitor)
-    image_bytes = mss.tools.to_png(i.rgb, i.size)
-    img = PIL.Image.open(io.BytesIO(image_bytes))
-    image_io = io.BytesIO()
-    img.save(image_io, format="jpeg")
-    image_io.seek(0)
-    image_bytes = image_io.read()
-    return {"mime_type": "image/jpeg", "data": base64.b64encode(image_bytes).decode()}
-
-async def get_screen_task(out_queue):
-    while global_session_vars['is_running'] and global_session_vars['video_mode'] == 'screen':
-        try:
-            frame = await asyncio.to_thread(_get_screen)
-            if frame is None:
-                socketio.emit('status', {'message': 'Error capturing screen.'})
-                break
-            await out_queue.put(frame)
-            await asyncio.sleep(1.0)
-        except Exception as e:
-            print(f"Error in get_screen_task: {e}")
-            socketio.emit('error', {'message': f'Screen capture error: {str(e)}'})
-            break
-    print("Screen task ended")
-
-async def send_realtime_task(live_session, out_queue):
-    while global_session_vars['is_running']:
-        try:
-            msg = await out_queue.get()
-            if live_session and global_session_vars['is_running']:
-                await live_session.send_realtime_input(msg)
-            out_queue.task_done()
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            print(f"Error in send_realtime_task: {e}")
-            socketio.emit('error', {'message': f'Realtime sending error: {str(e)}'})
-            break
-    print("Send realtime task ended")
-
-
-
-async def receive_gemini_audio_task(live_session, audio_in_queue, socketio_instance):
-    while global_session_vars['is_running']:
-        try:
-            if not live_session or not global_session_vars['is_running']:
-                await asyncio.sleep(0.1)
-                continue
-
-            # Correctly iterate over the async generator <mcreference link="https://github.com/googleapis/python-genai/blob/main/google/genai/live.py" index="1">1</mcreference>
-            async for response in live_session.receive():
-                if not global_session_vars['is_running']:
-                    break
-                if data := response.data:
-                    socketio_instance.emit('bot_speech_start') # Emit before putting to queue
-                    audio_in_queue.put_nowait(data)
-                if text := response.text:
-                    print(f"Gemini Text: {text}")
-                    socketio_instance.emit('bot_text', {'text': text})
-
-        except asyncio.CancelledError:
-            break
-        except Exception as e:
-            # CORRECTED exception handling
-            if type(e).__name__ == "StopCandidateException":
-                print("Gemini turn ended (StopCandidateException).")
-                break
-            else:
-                print(f"Error in receive_gemini_audio_task: {e}")
-                socketio_instance.emit('error', {'message': f'Gemini audio receiving error: {str(e)}'})
-                await asyncio.sleep(1) # Avoid tight loop on persistent error
-    print("Receive Gemini audio task ended")
-
-
-
-async def run_gemini_interaction(live_session, audio_out_queue, audio_in_queue, video_mode):
-    print("[DEBUG] Entered run_gemini_interaction") # DEBUG_LOG_3
-    print(f"Starting Gemini interaction with video_mode: {video_mode}")
-    global_session_vars['is_running'] = True
-    global_session_vars['live_session'] = live_session
-    global_session_vars['audio_out_queue'] = audio_out_queue
-    global_session_vars['audio_in_queue'] = audio_in_queue
-    global_session_vars['video_mode'] = video_mode
-
-    tasks = []
-    try:
-        # Start microphone input task
-        tasks.append(asyncio.create_task(listen_audio_task(live_session, audio_out_queue, socketio, global_session_vars))) # Passed socketio and global_session_vars
-
-        # Start video input task if applicable
-        if video_mode == 'camera':
-            tasks.append(asyncio.create_task(get_frames_task(audio_out_queue)))
-        elif video_mode == 'screen':
-            tasks.append(asyncio.create_task(get_screen_task(audio_out_queue)))
-
-        # Start task to send data from queue to Gemini
-        tasks.append(asyncio.create_task(send_realtime_task(live_session, audio_out_queue)))
-
-        # Start task to receive audio from Gemini and play it
-        tasks.append(asyncio.create_task(receive_gemini_audio_task(live_session, audio_in_queue, socketio))) # Passed socketio
-        tasks.append(asyncio.create_task(play_audio_task(audio_in_queue, socketio, global_session_vars)))
-        
-        global_session_vars['tasks'] = tasks
-        await asyncio.gather(*tasks)
-
-    except Exception as e:
-        # CORRECTED exception handling
-        if type(e).__name__ == "StopCandidateException":
-            print("StopCandidateException received, interaction ended normally.")
-            socketio.emit('interaction_stopped', {'message': 'Interaction ended by Gemini.'})
-        elif type(e).__name__ == "DeadlineExceeded":
-            print("DeadlineExceeded during Gemini interaction.")
-            socketio.emit('error', {'message': 'Interaction timed out.'})
-        else:
-            print(f"Exception in run_gemini_interaction: {e}")
-            traceback.print_exc()
-            socketio.emit('error', {'message': f'An error occurred: {str(e)}'})
-    finally:
-        print("run_gemini_interaction cleaning up...")
-        await stop_gemini_session_async()
 
 @app.route('/')
 def index():
@@ -331,17 +188,13 @@ def handle_start_interaction(data): # Renamed function
         traceback.print_exc()
         emit('error', {'message': f'Failed to start interaction: {str(e)}'})
 
-@socketio.on('stop_interaction') # Renamed event
-def handle_stop_interaction(): # Renamed function
+@socketio.on('stop_interaction')
+def handle_stop_interaction():
     print("SocketIO: Received stop_interaction event.")
     emit('status', {'message': 'Stop request received. Attempting to stop interaction...'})
     
-    # Simply set the flag to stop the interaction
-    # The background thread will handle the cleanup
     if global_session_vars.get('is_running'):
-        global_session_vars['is_running'] = False
-        emit('status', {'message': 'Interaction stopped.'})
-        emit('interaction_stopped', {'message': 'Interaction stopped by user.'})
+        asyncio.run(stop_gemini_session_async())
     else:
         emit('status', {'message': 'No active interaction to stop.'})
 
@@ -351,10 +204,4 @@ def handle_stop_interaction(): # Renamed function
 if __name__ == '__main__':
     print("Starting Flask-SocketIO server...")
     list_audio_devices() # List devices on startup
-    # It's important that PyAudio is terminated when the app exits.
-    try:
-        socketio.run(app, debug=True, host='0.0.0.0', port=5004, use_reloader=False) # Changed port to 5001
-    finally:
-        print("Terminating PyAudio...")
-        terminate_pyaudio()
-        print("PyAudio terminated.")
+    socketio.run(app, debug=True, host='0.0.0.0', port=5004, use_reloader=False)
